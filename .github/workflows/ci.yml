@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
 
+# Minimale Rechte für den GITHUB_TOKEN
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,3 +31,63 @@ jobs:
 
       - name: Build erstellen
         run: npm run build
+
+  # ---------------------------------------------------------------
+  # Security-Prüfungen (W11, Teil A)
+  # Jede Prüfung ist ein eigener Job, damit alle unabhängig laufen.
+  # Vorläufig: continue-on-error, damit alle Funde gesammelt werden.
+  # Die Abbruchregel wird in Teil D festgelegt.
+  # ---------------------------------------------------------------
+
+  dependency-audit:
+    name: Abhängigkeiten prüfen (npm audit)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Node 20 einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # npm audit liest nur package-lock.json, ein npm ci ist nicht nötig.
+      # Ohne --audit-level werden alle Stufen angezeigt (low bis critical).
+      - name: npm audit (alle Funde)
+        run: npm audit
+
+  secret-scan:
+    name: Secrets prüfen (gitleaks)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Code auschecken (ganze Historie)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # sonst wird nur der letzte Commit geprüft
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  image-scan:
+    name: Docker-Image prüfen (Trivy)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Image bauen
+        run: docker build -t shopping-list:${{ github.sha }} .
+
+      # Feste Trivy-Version statt :latest (Supply-Chain-Risiko).
+      # --exit-code 0: nur melden, nicht abbrechen (Abbruchregel folgt in Teil D).
+      - name: Image scannen
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.58.1 image \
+            --exit-code 0 \
+            shopping-list:${{ github.sha }}
